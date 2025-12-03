@@ -67,10 +67,14 @@ def convert_interactions_to_csv(splits: Dict[str, List], items: Dict[str, Dict],
         user_to_longest = {}  # For train data: keep only longest sequence per user
         
         for line in split_data:
-            if len(line) != 3:
+            # Handle 3 or 4 columns
+            if len(line) == 3:
+                user_id, item_sequence, target_item = line
+                e_token = '[CTX_HOMEPAGE]' # Default
+            elif len(line) == 4:
+                user_id, item_sequence, target_item, e_token = line
+            else:
                 continue
-                
-            user_id, item_sequence, target_item = line
             
             # Parse item sequence - these are item_ids from the interaction data
             if item_sequence.strip():
@@ -110,12 +114,14 @@ def convert_interactions_to_csv(splits: Dict[str, List], items: Dict[str, Dict],
             # Create row with required fields
             row = {
                 'user_id': f'A{user_id}',  # Format like A2013JDMPUV6D9
+                'user_id_original_str': user_id, # Added
                 'history_item_title': history_item_titles,
                 'item_title': target_title,
                 'history_item_id': history_item_ids,  # Original item_ids
                 'item_id': target_item_id,  # Original item_id
                 'history_item_sid': history_semantic_ids,  # Semantic IDs (with brackets)
-                'item_sid': target_semantic_id  # Target semantic ID (with brackets)
+                'item_sid': target_semantic_id,  # Target semantic ID (with brackets)
+                'e_token': e_token # Added
             }
             
             # For train data: keep only longest sequence per user (if enabled)

@@ -259,6 +259,10 @@ def generate_interaction_list_json2csv_style(reviews, user2index, item2index, id
         # Create sequences like json2csv (sliding window with max history of 10)
         for i in range(1, len(items)):
             st = max(i - 10, 0)
+            
+            # Simulate E-Token
+            e_token = random.choice(['[CTX_BROWSE]', '[CTX_SEARCH]', '[CTX_HOMEPAGE]'])
+            
             interaction_list.append([
                 user,                    # user_id
                 items[st:i],            # item_asins (history)
@@ -270,11 +274,12 @@ def generate_interaction_list_json2csv_style(reviews, user2index, item2index, id
                 ratings[st:i],          # history_rating
                 ratings[i],             # rating (target)
                 timestamps[st:i],       # history_timestamp
-                timestamps[i]           # timestamp (target)
+                timestamps[i],          # timestamp (target)
+                e_token                 # e_token
             ])
     
     # Sort by timestamp for chronological split
-    interaction_list.sort(key=lambda x: int(x[-1]))
+    interaction_list.sort(key=lambda x: int(x[-2])) # Sort by target timestamp (index -2 now)
     return interaction_list
 
 
@@ -301,42 +306,45 @@ def convert_to_atomic_files_json2csv_style(args, interaction_list, user2index):
     
     # Write train file
     with open(os.path.join(args.output_path, args.dataset, f'{args.dataset}.train.inter'), 'w') as file:
-        file.write('user_id:token\titem_id_list:token_seq\titem_id:token\n')
+        file.write('user_id:token\titem_id_list:token_seq\titem_id:token\te_token:token\n')
         for interaction in train_interactions:
             user_id_original = interaction[0]
             user_id = user2index[user_id_original]  
             history_item_ids = [str(x) for x in interaction[3]]  # history item ids
             target_item_id = str(interaction[4])  # target item id
+            e_token = interaction[11]
             
             # Limit history to last 50 items like amazon18
             history_seq = history_item_ids[-50:]
-            file.write(f'{user_id}\t{" ".join(history_seq)}\t{target_item_id}\n')
+            file.write(f'{user_id}\t{" ".join(history_seq)}\t{target_item_id}\t{e_token}\n')
     
     # Write valid file  
     with open(os.path.join(args.output_path, args.dataset, f'{args.dataset}.valid.inter'), 'w') as file:
-        file.write('user_id:token\titem_id_list:token_seq\titem_id:token\n')
+        file.write('user_id:token\titem_id_list:token_seq\titem_id:token\te_token:token\n')
         for interaction in valid_interactions:
             user_id_original = interaction[0]
             user_id = user2index[user_id_original]  
             history_item_ids = [str(x) for x in interaction[3]]  # history item ids
             target_item_id = str(interaction[4])  # target item id
+            e_token = interaction[11]
             
             # Limit history to last 50 items like amazon18
             history_seq = history_item_ids[-50:]
-            file.write(f'{user_id}\t{" ".join(history_seq)}\t{target_item_id}\n')
+            file.write(f'{user_id}\t{" ".join(history_seq)}\t{target_item_id}\t{e_token}\n')
     
     # Write test file
     with open(os.path.join(args.output_path, args.dataset, f'{args.dataset}.test.inter'), 'w') as file:
-        file.write('user_id:token\titem_id_list:token_seq\titem_id:token\n')
+        file.write('user_id:token\titem_id_list:token_seq\titem_id:token\te_token:token\n')
         for interaction in test_interactions:
             user_id_original = interaction[0]
             user_id = user2index[user_id_original] 
             history_item_ids = [str(x) for x in interaction[3]]  # history item ids  
             target_item_id = str(interaction[4])  # target item id
+            e_token = interaction[11]
             
             # Limit history to last 50 items like amazon18
             history_seq = history_item_ids[-50:]
-            file.write(f'{user_id}\t{" ".join(history_seq)}\t{target_item_id}\n')
+            file.write(f'{user_id}\t{" ".join(history_seq)}\t{target_item_id}\t{e_token}\n')
     
     return train_interactions, valid_interactions, test_interactions
 
@@ -379,7 +387,7 @@ def load_review_data_amazon18_style(reviews, user2index, item2index):
     return review_data
 
 
-def create_item_features_amazon18_style(metadata, item2index, id_title):
+def create_item_features_amazon18_style(metadata, item2index, id_title, item_counts):
     """Create item features like amazon18_data_process"""
     item2feature = collections.defaultdict(dict)
     
@@ -387,6 +395,8 @@ def create_item_features_amazon18_style(metadata, item2index, id_title):
     asin_to_meta = {}
     for meta in metadata:
         asin_to_meta[meta['asin']] = meta
+    
+    all_final_values = []
     
     for item_asin, item_id in item2index.items():
         if item_asin in asin_to_meta:
@@ -421,14 +431,71 @@ def create_item_features_amazon18_style(metadata, item2index, id_title):
             else:
                 categories = ""
             
+            # Item Type & Final Value
+            try:
+                price_str = str(meta.get('price', '0')).replace('$', '').replace(',', '')
+                price = float(price_str)
+            except ValueError:
+                price = 0.0
+
+            # Rule: Price > 50 or Brand is known -> 'I' (Ad), else 'O' (Organic)
+            if price > 50.0 or (brand and brand != 'Unknown'):
+                item_type = 'I'
+            else:
+                item_type = 'O'
+
+            # Simulate Value: log(price) + log(num_reviews)
+            num_reviews = item_counts.get(item_asin, 0)
+            final_value = np.log1p(price) + np.log1p(num_reviews)
+            all_final_values.append(final_value)
+            
             item2feature[item_id] = {
                 "title": title,
                 "description": descriptions,
                 "brand": brand,
-                "categories": categories
+                "categories": categories,
+                "item_type": item_type,
+                "final_value": final_value
             }
+            
+    # Normalize final_value to (0, 1)
+    if all_final_values:
+        min_val = np.min(all_final_values)
+        max_val = np.max(all_final_values)
+        for item_id in item2feature:
+             raw_val = item2feature[item_id]['final_value']
+             if max_val > min_val:
+                 norm_val = (raw_val - min_val) / (max_val - min_val)
+             else:
+                 norm_val = 0.5
+             item2feature[item_id]['final_value'] = norm_val
     
     return item2feature
+
+
+def create_user_features(reviews, user2index, output_path, dataset_name):
+    """Create user features (U-Token)"""
+    user_features = {}
+    user_ratings = collections.defaultdict(list)
+    
+    for review in reviews:
+        if review['reviewerID'] in user2index:
+            user_ratings[review['reviewerID']].append(float(review['overall']))
+            
+    for user, ratings in user_ratings.items():
+        avg_rating = sum(ratings) / len(ratings)
+        if avg_rating > 4.5:
+            u_token = '[USER_HIGH_RATING]'
+        elif avg_rating > 3.5:
+            u_token = '[USER_MID_RATING]'
+        else:
+            u_token = '[USER_LOW_RATING]'
+        
+        # Map original user ID to feature
+        user_features[user] = u_token
+        
+    write_json_file(user_features, os.path.join(output_path, dataset_name, f'{dataset_name}.user.json'))
+    return user_features
 
 
 def process_dataset_recursive(args, metadata, reviews, start_timestamp, end_timestamp):
@@ -548,11 +615,19 @@ if __name__ == '__main__':
     
     # Create item features
     print("Creating item features...")
-    item2feature = create_item_features_amazon18_style(metadata, item2index, id_title)
+    item2feature = create_item_features_amazon18_style(metadata, item2index, id_title, item_counts)
+    
+    # Create user features
+    print("Creating user features...")
+    create_user_features(filtered_reviews, user2index, args.output_path, args.dataset)
     
     # Load review data
     print("Loading review data...")
     review_data = load_review_data_amazon18_style(filtered_reviews, user2index, item2index)
+    
+    # Create user features
+    print("Creating user features...")
+    user_features = create_user_features(filtered_reviews, user2index, args.output_path, args.dataset)
     
     print(f"Final statistics:")
     print(f"Users: {len(user2index)}")

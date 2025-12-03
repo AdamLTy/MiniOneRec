@@ -88,8 +88,15 @@ def generate_item_embedding(args, item_text_list, tokenizer, model, accelerator,
                 for text in batch_texts:
                     sent = text.split(' ')
                     new_sent = [wd for wd in sent if random.random() > word_drop_ratio]
-                    processed_batch.append(' '.join(new_sent))
+                    processed_text = ' '.join(new_sent)
+                    # Prevent empty strings after word drop
+                    if not processed_text.strip():
+                        processed_text = "[EMPTY]"
+                    processed_batch.append(processed_text)
                 batch_texts = processed_batch
+
+            # Filter out empty sentences and replace with a placeholder
+            batch_texts = [s.strip() if s.strip() else "[EMPTY]" for s in batch_texts]
 
             # Tokenization
             encoded_sentences = tokenizer(

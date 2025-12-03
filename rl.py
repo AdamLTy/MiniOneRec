@@ -14,6 +14,7 @@ import pickle
 import math
 import json
 from sklearn.metrics import ndcg_score
+import re
 
 os.environ['WANDB_MODE'] = 'disabled'
 
@@ -80,6 +81,44 @@ def train(
         # Extract semantic_id (first column) from the format: semantic_id \t item_title \t item_id
         item_name = [_.split('\t')[0].strip() for _ in info]
         item2id = {name: i for i, name in enumerate(item_name)}
+
+    # Parse semantic IDs for HEPO
+    def parse_sid(sid):
+        return re.findall(r'\[.*?\]', sid)
+
+    item2id_parts = {}
+    for name in item_name:
+        parts = parse_sid(name)
+        item2id_parts[name] = tuple(parts)
+
+    def hepo_reward(prompts, completions):
+        history = [prompt2history.get(prompt, "") for prompt in prompts]
+        targets_full_sid = [history2target.get(elm, "") for elm in history]
+    
+        rewards = []
+        for i, comp_full_sid in enumerate(completions):
+            comp_full_sid = comp_full_sid.strip(" \n\"")
+            target_full_sid = targets_full_sid[i].strip(" \n\"")
+    
+            if target_full_sid not in item2id_parts:
+                rewards.append(0.0)
+                continue
+    
+            target_parts = item2id_parts[target_full_sid]
+            comp_parts = parse_sid(comp_full_sid)
+            
+            reward = 0.0
+            
+            # Hierarchical Reward
+            if len(comp_parts) > 0 and len(target_parts) > 0 and comp_parts[0] == target_parts[0]:
+                reward = 0.2
+                if len(comp_parts) > 1 and len(target_parts) > 1 and comp_parts[1] == target_parts[1]:
+                    reward = 0.5
+                    if len(comp_parts) > 2 and len(target_parts) > 2 and comp_parts[2] == target_parts[2]:
+                        reward = 1.0
+            
+            rewards.append(reward)
+        return rewards
 
     sample = -1
     train_datasets = []
@@ -230,11 +269,15 @@ def train(
         len_lis = []
         history_ids = []
         for his in history_list:
-            his = [item2id[elm] for elm in his]
+            # Filter out items not in item2id mapping
+            his = [item2id[elm] for elm in his if elm in item2id]
+            # If all items filtered out, use a default item
+            if len(his) == 0:
+                his = [item_num]  # padding item
             len_lis.append(len(his))
             if len(his) < len_seq: 
                 his = his + [item_num] * (len_seq - len(his))
-            history_ids.append(his)
+            history_ids.append(his[:len_seq])  # truncate if too long
         
         seq = torch.LongTensor(history_ids).to(device)
         pred = torch.LongTensor(pred_ids).to(device)    
@@ -255,7 +298,7 @@ def train(
     elif reward_type == "semantic":
         reward_fun = semantic_reward
     elif reward_type == "sasrec":
-        reward_fun = cf_reward
+        reward_fun = [cf_reward, hepo_reward] # Combine rewards
     
     os.environ['WANDB_PROJECT'] = wandb_project
     os.environ["WANDB_MODE"] = "offline"

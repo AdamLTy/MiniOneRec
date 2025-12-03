@@ -493,6 +493,26 @@ class SidSFTDataset(Dataset):
         self.max_len = max_len
         self.category = category
         self.dedup = dedup
+        
+        # Try to load features from standard location
+        try:
+            with open(f'data/{category}/{category}.user.json', 'r') as f:
+                self.user_features = json.load(f)
+        except FileNotFoundError:
+            try:
+                dataset_dir = os.path.dirname(train_file)
+                # Assuming structure data/Amazon/train/Sports... -> data/Sports/Sports.user.json
+                with open(f'data/{category}/{category}.user.json', 'r') as f:
+                    self.user_features = json.load(f)
+            except:
+                self.user_features = {}
+            
+        try:
+            with open(f'data/{category}/{category}.item.json', 'r') as f:
+                self.item_features = json.load(f)
+        except FileNotFoundError:
+            self.item_features = {}
+            
         self.get_inputs()  
     
     def __len__(self):
@@ -531,27 +551,63 @@ Can you predict the next possible item that the user may expect?
 """
         tokens = self.tokenizer.encode(instruction, bos=True, eos=False)
         
-        history = self.get_history(self.data.iloc[idx])
-        # print("**********************")
-        # print("history: ", history)
+        row = self.data.iloc[idx]
+        
+        # Heterogeneous Prompt Construction
+        user_id = str(row.get('user_id_original_str', ''))
+        u_token = self.user_features.get(user_id, '[USER_UNKNOWN]')
+        e_token = row.get('e_token', '[CTX_HOMEPAGE]')
+        
+        try:
+            history_item_ids = eval(str(row['history_item_id']))
+            history_sids = eval(str(row['history_item_sid']))
+        except:
+            history_item_ids = []
+            history_sids = []
+            
+        history_str = ""
+        for i, item_id in enumerate(history_item_ids):
+            item_type = self.item_features.get(str(item_id), {}).get('item_type', 'O')
+            token_prefix = '[O_TOKEN]' if item_type == 'O' else '[I_TOKEN]'
+            
+            if i > 0: history_str += ", "
+            sid = history_sids[i] if i < len(history_sids) else ""
+            history_str += f"{token_prefix}{sid}"
+            
+        target_item_id = str(row['item_id'])
+        target_sid = str(row['item_sid'])
+        target_type = self.item_features.get(target_item_id, {}).get('item_type', 'O')
+        target_prefix = '[O_TOKEN]' if target_type == 'O' else '[I_TOKEN]'
+        
+        target_item_with_prefix = f"{target_prefix}{target_sid}\n"
+        
+        # Prompt
+        input_text = f"{u_token} {e_token} The user has interacted with items {history_str} in chronological order. Can you predict the next possible item that the user may expect?"
+        
+        history = {
+            "input": input_text,
+            "output": target_item_with_prefix
+        }
+        
         target_item = history['output']
         history['output'] = ''
         negative_prompt_ids = copy.deepcopy(tokens)
         
         prompt = self.generate_prompt(history)
-        # print("prompt: ", prompt)
 
         tokens = tokens + self.tokenizer.encode(prompt, bos=False, eos=False)
-        # print("tokens: ", tokens)
-        # print("**********************")
         history["input"] = ""
         
         attention_mask = [1] * len(tokens)
+        
+        # Final Value for VAFT
+        final_value = self.item_features.get(target_item_id, {}).get('final_value', 0.0)
         
         if self.test:
             return {
                 "input_ids": tokens,
                 "attention_mask": attention_mask,
+                "final_value": final_value
             }    
         
         golden_tokens = self.tokenizer.encode(target_item, bos=False, eos=True)
@@ -567,6 +623,7 @@ Can you predict the next possible item that the user may expect?
             "input_ids": tokens[-self.max_len:],
             "attention_mask": attention_mask[-self.max_len:],
             "labels": labels[-self.max_len:],
+            "final_value": final_value
         }
     
     def get_inputs(self):
