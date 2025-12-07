@@ -67,14 +67,43 @@ def train(
     dapo: bool = False,
     gspo: bool = False,
 ):
-    torch.backends.cuda.enable_flash_sdp(False)  
+    torch.backends.cuda.enable_flash_sdp(False)
     torch.backends.cuda.enable_mem_efficient_sdp(False)
     set_seed(seed)
-    
+
+    # ========== 路径验证 ==========
+    # 验证模型路径
+    if not model_path or not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model path not found: {model_path}")
+
+    # 验证数据文件
+    for file_desc, file_path in [("Train file", train_file), ("Eval file", eval_file), ("Info file", info_file)]:
+        if not file_path or not os.path.exists(file_path):
+            raise FileNotFoundError(f"{file_desc} not found: {file_path}")
+
+    # 验证 SID 索引和元数据文件
+    if sid_index_path:
+        sid_index_path = os.path.abspath(sid_index_path)
+        if not os.path.exists(sid_index_path):
+            raise FileNotFoundError(f"SID index file not found: {sid_index_path}")
+        print(f"Using SID index: {sid_index_path}")
+
+    if item_meta_path:
+        item_meta_path = os.path.abspath(item_meta_path)
+        if not os.path.exists(item_meta_path):
+            raise FileNotFoundError(f"Item meta file not found: {item_meta_path}")
+        print(f"Using item meta: {item_meta_path}")
+
+    # 验证输出目录
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+        print(f"Output directory: {output_dir}")
+    # ========== 路径验证结束 ==========
+
     category_dict = {"Industrial_and_Scientific": "industrial and scientific items", "Office_Products": "office products", "Toys_and_Games": "toys and games", "Sports": "sports and outdoors", "Books": "books"}
-    print(category)
-    
-    
+    print(f"Category: {category}")
+
+
     with open(info_file, 'r') as f:
         info = f.readlines()
         # Extract semantic_id (first column) from the format: semantic_id \t item_title \t item_id

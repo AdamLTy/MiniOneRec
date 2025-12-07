@@ -4,6 +4,12 @@ import torch
 import numpy as np
 from time import time
 import logging
+import os
+import sys
+
+# 添加 rq 目录到 Python 路径以支持相对导入
+RQ_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, RQ_DIR)
 
 from torch.utils.data import DataLoader
 

@@ -156,8 +156,22 @@ def train(
     tokenizer.pad_token_id = tokenizer.eos_token_id
     tokenizer.padding_side = "left"
     
-    if sid_index_path and os.path.exists(sid_index_path):
+    # 验证和加载 SID 索引
+    if sid_index_path:
+        # 转换为绝对路径
+        sid_index_path = os.path.abspath(sid_index_path)
+
+        if not os.path.exists(sid_index_path):
+            raise FileNotFoundError(f"SID index file not found: {sid_index_path}")
+
         print(f"Loading index from {sid_index_path}")
+
+        # 验证对应的 item meta 文件是否存在
+        if item_meta_path:
+            item_meta_path = os.path.abspath(item_meta_path)
+            if not os.path.exists(item_meta_path):
+                raise FileNotFoundError(f"Item meta file not found: {item_meta_path}")
+
         token_extender = TokenExtender(
             data_path=os.path.dirname(sid_index_path),
             dataset=os.path.basename(sid_index_path).split('.')[0]
@@ -167,6 +181,8 @@ def train(
             print(f"Adding {len(new_tokens)} new tokens to tokenizer")
             tokenizer.add_tokens(new_tokens)
             model.resize_token_embeddings(len(tokenizer))
+        else:
+            print("Warning: No new tokens found in the index file")
 
     # Freeze LLM parameters if required
     if freeze_LLM:

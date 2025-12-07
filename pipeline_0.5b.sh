@@ -33,15 +33,15 @@ echo "--------------------------------------------------"
 
 if [ ! -d "${DATA_ROOT}" ]; then
     echo "开始下载和预处理 Amazon 数据集..."
-    bash data/amazon18_data_process.sh \
-        --dataset ${CATEGORY} \
-        --user_k 5 \
-        --item_k 5 \
-        --st_year 1996 \
-        --st_month 10 \
-        --ed_year 2018 \
-        --ed_month 11 \
-        --output_path ./data/Amazon18
+    DATASET=${CATEGORY} \
+    USER_K=5 \
+    ITEM_K=5 \
+    ST_YEAR=1996 \
+    ST_MONTH=10 \
+    ED_YEAR=2018 \
+    ED_MONTH=11 \
+    OUTPUT_PATH=./data/Amazon18 \
+    bash data/amazon18_data_process.sh
 else
     echo "数据集已存在,跳过下载"
 fi
@@ -54,10 +54,11 @@ echo "--------------------------------------------------"
 EMB_FILE="${DATA_ROOT}/${CATEGORY}.emb.npy"
 if [ ! -f "${EMB_FILE}" ]; then
     echo "开始生成物品嵌入..."
-    bash rq/text2emb/amazon_text2emb.sh \
-        --dataset ${CATEGORY} \
-        --root ${DATA_ROOT} \
-        --plm_checkpoint ${EMB_MODEL}
+    DATASET=${CATEGORY} \
+    ROOT=${DATA_ROOT} \
+    PLM_CHECKPOINT=${EMB_MODEL} \
+    NUM_PROCESSES=8 \
+    bash rq/text2emb/amazon_text2emb.sh
 else
     echo "嵌入文件已存在,跳过生成"
 fi
@@ -71,10 +72,9 @@ SID_OUTPUT_DIR="${OUTPUT_ROOT}/sid"
 mkdir -p ${SID_OUTPUT_DIR}
 
 echo "使用 RQ-VAE 方法 (带 SwanLab 监控)..."
-cd rq
-python rqvae.py \
-    --data_path ../${EMB_FILE} \
-    --ckpt_dir ../${SID_OUTPUT_DIR}/rqvae \
+python rq/rqvae.py \
+    --data_path ${EMB_FILE} \
+    --ckpt_dir ${SID_OUTPUT_DIR}/rqvae \
     --lr 1e-3 \
     --epochs 10000 \
     --batch_size 20480 \
@@ -84,7 +84,6 @@ python rqvae.py \
     --use_swanlab True \
     --swanlab_project "MiniOneRec-Pipeline-RQVAE" \
     --swanlab_run_name "rqvae-${CATEGORY}-$(date +%m%d_%H%M)"
-cd ..
 
 python rq/generate_indices.py \
     --dataset ${CATEGORY} \
