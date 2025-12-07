@@ -105,9 +105,10 @@ def train(
     # llm hyperparams
     group_by_length: bool = False,  # faster, but produces an odd training loss curve
     freeze_LLM: bool = False,  # freeze LLM parameters, only train new token embeddings
-    # wandb params
+    # logging params (支持 wandb 和 swanlab)
     wandb_project: str = "",
     wandb_run_name: str = "",
+    use_swanlab: bool = False,  # 使用 SwanLab 而非 wandb
     resume_from_checkpoint: str = None,  # either training checkpoint or final adapter
     category: str="",
     train_from_scratch: bool = False,
@@ -115,7 +116,16 @@ def train(
     item_meta_path: str = "",
 ):
     set_seed(seed)
-    os.environ['WANDB_PROJECT'] = wandb_project
+
+    # 配置日志工具
+    if use_swanlab:
+        os.environ['SWANLAB_PROJECT'] = wandb_project if wandb_project else "MiniOneRec"
+        os.environ['SWANLAB_RUN_NAME'] = wandb_run_name if wandb_run_name else "sft-run"
+        print(f"Using SwanLab for experiment tracking: {wandb_project}")
+    elif wandb_project:
+        os.environ['WANDB_PROJECT'] = wandb_project
+        print(f"Using WandB for experiment tracking: {wandb_project}")
+
     category_dict = {"Industrial_and_Scientific": "industrial and scientific items", "Office_Products": "office products", "Toys_and_Games": "toys and games", "Sports": "sports and outdoors", "Books": "books"}
     print(category)
     category = category_dict[category]
@@ -249,7 +259,7 @@ def train(
             load_best_model_at_end=True,
             ddp_find_unused_parameters=False if ddp else None,
             group_by_length=group_by_length,
-            report_to=None,
+            report_to="swanlab" if use_swanlab else ("wandb" if wandb_project else None),
         ),
         data_collator=transformers.DataCollatorForSeq2Seq(
             tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
