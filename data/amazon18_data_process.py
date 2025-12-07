@@ -63,8 +63,10 @@ def get_timestamp_start(year, month):
 def load_metadata_json2csv_style(category, metadata_file=None):
     """Load metadata using json2csv style processing"""
     if metadata_file is None:
-        metadata_file = f'../meta_{category}.json'
-    
+        # 使用脚本所在目录查找文件
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        metadata_file = os.path.join(script_dir, f'meta_{category}.json')
+
     metadata = []
     try:
         with open(metadata_file) as f:
@@ -96,15 +98,21 @@ def load_metadata_json2csv_style(category, metadata_file=None):
 def load_reviews_json2csv_style(category, reviews_file=None, start_timestamp=None, end_timestamp=None):
     """Load reviews using json2csv style processing"""
     if reviews_file is None:
+        # 使用脚本所在目录查找文件
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+
         try:
-            with open(f'../{category}_5.json') as f:
+            reviews_path = os.path.join(script_dir, f'{category}_5.json')
+            with open(reviews_path) as f:
                 reviews = [json.loads(line) for line in f]
         except FileNotFoundError:
             try:
-                with open(f'../{category}.json') as f:
+                reviews_path = os.path.join(script_dir, f'{category}.json')
+                with open(reviews_path) as f:
                     reviews = [json.loads(line) for line in f]
             except FileNotFoundError:
                 print(f"Reviews file not found for category {category}")
+                print(f"Tried: {script_dir}/{category}_5.json and {script_dir}/{category}.json")
                 return []
     else:
         try:
@@ -113,7 +121,7 @@ def load_reviews_json2csv_style(category, reviews_file=None, start_timestamp=Non
         except FileNotFoundError:
             print(f"Reviews file {reviews_file} not found")
             return []
-    
+
     # NOTE: Don't filter by timestamp here, do it in k-core filtering like json2csv
     return reviews
 
