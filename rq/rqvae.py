@@ -46,6 +46,11 @@ def parse_args():
     parser.add_argument('--save_limit', type=int, default=5)
     parser.add_argument("--ckpt_dir", type=str, default="", help="output directory for model")
 
+    # SwanLab 参数
+    parser.add_argument('--use_swanlab', type=bool, default=False, help='use SwanLab for logging')
+    parser.add_argument('--swanlab_project', type=str, default='MiniOneRec-RQVAE', help='SwanLab project name')
+    parser.add_argument('--swanlab_run_name', type=str, default='rqvae-training', help='SwanLab run name')
+
     return parser.parse_args()
 
 
@@ -65,6 +70,21 @@ if __name__ == '__main__':
     print("=================================================")
 
     logging.basicConfig(level=logging.DEBUG)
+
+    # 初始化 SwanLab
+    swanlab_run = None
+    if args.use_swanlab:
+        try:
+            import swanlab
+            swanlab_run = swanlab.init(
+                project=args.swanlab_project,
+                experiment_name=args.swanlab_run_name,
+                config=vars(args)
+            )
+            print(f"SwanLab initialized: project={args.swanlab_project}, run={args.swanlab_run_name}")
+        except ImportError:
+            print("Warning: swanlab not installed. Install with: pip install swanlab")
+            args.use_swanlab = False
 
     """build dataset"""
     data = EmbDataset(args.data_path)
@@ -91,4 +111,8 @@ if __name__ == '__main__':
 
     print("Best Loss",best_loss)
     print("Best Collision Rate", best_collision_rate)
+
+    # 结束 SwanLab 记录
+    if swanlab_run is not None:
+        swanlab_run.finish()
 

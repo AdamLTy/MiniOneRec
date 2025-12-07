@@ -46,6 +46,10 @@ class Trainer(object):
         self.scheduler = self._get_scheduler()
         self.model = self.model.to(self.device)
 
+        # SwanLab 支持
+        self.use_swanlab = getattr(args, 'use_swanlab', False)
+        self.global_step = 0
+
     def _build_optimizer(self):
 
         params = self.model.parameters()
@@ -101,6 +105,7 @@ class Trainer(object):
 
         total_loss = 0
         total_recon_loss = 0
+        total_quant_loss = 0
         iter_data = tqdm(
                     train_data,
                     total=len(train_data),
@@ -118,11 +123,29 @@ class Trainer(object):
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.optimizer.step()
             self.scheduler.step()
-            # print(self.scheduler.get_last_lr())
+
+            # 累计损失
             total_loss += loss.item()
             total_recon_loss += loss_recon.item()
+            total_quant_loss += rq_loss.item()
 
-        return total_loss, total_recon_loss
+            # SwanLab 实时记录 (每个 batch)
+            if self.use_swanlab:
+                try:
+                    import swanlab
+                    swanlab.log({
+                        'train/batch_total_loss': loss.item(),
+                        'train/batch_recon_loss': loss_recon.item(),
+                        'train/batch_quant_loss': rq_loss.item(),
+                        'train/learning_rate': self.scheduler.get_last_lr()[0],
+                        'train/global_step': self.global_step,
+                    }, step=self.global_step)
+                except:
+                    pass
+
+            self.global_step += 1
+
+        return total_loss, total_recon_loss, total_quant_loss
 
     @torch.no_grad()
     def _valid_epoch(self, valid_data):
@@ -138,18 +161,38 @@ class Trainer(object):
 
         indices_set = set()
         num_sample = 0
+        all_indices = []  # 用于分析 codebook 使用情况
+
         for batch_idx, data in enumerate(iter_data):
             num_sample += len(data)
             data = data.to(self.device)
             indices = self.model.get_indices(data)
             indices = indices.view(-1,indices.shape[-1]).cpu().numpy()
+            all_indices.append(indices)
+
             for index in indices:
                 code = "-".join([str(int(_)) for _ in index])
                 indices_set.add(code)
 
         collision_rate = (num_sample - len(list(indices_set)))/num_sample
+        unique_sids = len(indices_set)
 
-        return collision_rate
+        # 分析每层 codebook 使用情况
+        codebook_usage = {}
+        if len(all_indices) > 0:
+            all_indices = np.concatenate(all_indices, axis=0)  # [N, num_layers]
+            num_layers = all_indices.shape[1]
+            for layer_idx in range(num_layers):
+                layer_codes = all_indices[:, layer_idx]
+                unique_codes = len(np.unique(layer_codes))
+                codebook_size = self.model.num_emb_list[layer_idx] if hasattr(self.model, 'num_emb_list') else 256
+                usage_rate = unique_codes / codebook_size
+                codebook_usage[f'layer_{layer_idx}'] = {
+                    'unique_codes': unique_codes,
+                    'usage_rate': usage_rate
+                }
+
+        return collision_rate, unique_sids, num_sample, codebook_usage
 
     def _save_checkpoint(self, epoch, collision_rate=1, ckpt_file=None):
 
@@ -171,7 +214,7 @@ class Trainer(object):
 
         return ckpt_path
 
-    def _generate_train_loss_output(self, epoch_idx, s_time, e_time, loss, recon_loss):
+    def _generate_train_loss_output(self, epoch_idx, s_time, e_time, loss, recon_loss, quant_loss=0):
         train_loss_output = (
             set_color("epoch %d training", "green")
             + " ["
@@ -181,6 +224,8 @@ class Trainer(object):
         train_loss_output += set_color("train loss", "blue") + ": %.4f" % loss
         train_loss_output +=", "
         train_loss_output += set_color("reconstruction loss", "blue") + ": %.4f" % recon_loss
+        train_loss_output +=", "
+        train_loss_output += set_color("quantization loss", "blue") + ": %.4f" % quant_loss
         return train_loss_output + "]"
 
 
@@ -191,18 +236,33 @@ class Trainer(object):
         for epoch_idx in range(self.epochs):
             # train
             training_start_time = time()
-            train_loss, train_recon_loss = self._train_epoch(data, epoch_idx)
+            train_loss, train_recon_loss, train_quant_loss = self._train_epoch(data, epoch_idx)
             training_end_time = time()
+            epoch_time = training_end_time - training_start_time
+
             train_loss_output = self._generate_train_loss_output(
-                epoch_idx, training_start_time, training_end_time, train_loss, train_recon_loss
+                epoch_idx, training_start_time, training_end_time, train_loss, train_recon_loss, train_quant_loss
             )
             self.logger.info(train_loss_output)
 
+            # SwanLab 记录 epoch 级别指标
+            if self.use_swanlab:
+                try:
+                    import swanlab
+                    swanlab.log({
+                        'train/epoch_total_loss': train_loss,
+                        'train/epoch_recon_loss': train_recon_loss,
+                        'train/epoch_quant_loss': train_quant_loss,
+                        'system/epoch_time': epoch_time,
+                        'system/epoch': epoch_idx,
+                    }, step=epoch_idx)
+                except:
+                    pass
 
             # eval
             if (epoch_idx + 1) % self.eval_step == 0:
                 valid_start_time = time()
-                collision_rate = self._valid_epoch(data)
+                collision_rate, unique_sids, num_samples, codebook_usage = self._valid_epoch(data)
 
                 if train_loss < self.best_loss:
                     self.best_loss = train_loss
@@ -224,10 +284,34 @@ class Trainer(object):
                     + set_color("time", "blue")
                     + ": %.2fs, "
                     + set_color("collision_rate", "blue")
-                    + ": %f]"
-                ) % (epoch_idx, valid_end_time - valid_start_time, collision_rate)
+                    + ": %f, "
+                    + set_color("unique_sids", "blue")
+                    + ": %d/%d]"
+                ) % (epoch_idx, valid_end_time - valid_start_time, collision_rate, unique_sids, num_samples)
 
                 self.logger.info(valid_score_output)
+
+                # SwanLab 记录评估指标
+                if self.use_swanlab:
+                    try:
+                        import swanlab
+                        eval_metrics = {
+                            'eval/collision_rate': collision_rate,
+                            'eval/unique_sids': unique_sids,
+                            'eval/total_samples': num_samples,
+                            'eval/uniqueness_rate': unique_sids / num_samples if num_samples > 0 else 0,
+                            'eval/best_collision_rate': self.best_collision_rate,
+                        }
+
+                        # 记录每层 codebook 使用率
+                        for layer_name, usage_info in codebook_usage.items():
+                            eval_metrics[f'codebook/{layer_name}_usage_rate'] = usage_info['usage_rate']
+                            eval_metrics[f'codebook/{layer_name}_unique_codes'] = usage_info['unique_codes']
+
+                        swanlab.log(eval_metrics, step=epoch_idx)
+                    except:
+                        pass
+
                 ckpt_path = self._save_checkpoint(epoch_idx, collision_rate=collision_rate)
                 now_save = (-collision_rate, ckpt_path)
                 if len(self.newest_save_queue) < self.save_limit:
