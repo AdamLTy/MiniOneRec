@@ -1,4 +1,5 @@
-python amazon18_data_process.py \
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python "${SCRIPT_DIR}/amazon18_data_process.py" \
     --dataset Industrial_and_Scientific \
     --user_k 5 \
     --item_k 5 \
